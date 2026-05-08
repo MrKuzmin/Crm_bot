@@ -155,12 +155,3 @@ python-dotenv
 
 Лицензия
 MIT
-
-text
-
-Сохрани и запушь:
-
-```bash
-git add README.md
-git commit -m "Add README"
-git push
