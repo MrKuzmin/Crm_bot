@@ -1,0 +1,4 @@
+.env
+worktime.db
+__pycache__/
+*.pyc
