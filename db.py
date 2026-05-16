@@ -241,7 +241,28 @@ def get_vacations_starting_today(date_str: str) -> list:
             (date_str,)
         ).fetchall()
 
-
+def get_vacation_days_for_year(user_id: int, year: int) -> float:
+    """Сумма дней в одобренных отпусках пользователя за указанный год"""
+    with sqlite3.connect(DB_NAME) as conn:
+        rows = conn.execute(
+            "SELECT start_date, end_date FROM vacations WHERE user_id = ? AND status = 'approved'",
+            (user_id,)
+        ).fetchall()
+    
+    total = 0.0
+    for s, e in rows:
+        try:
+            d1 = datetime.strptime(s, "%d.%m.%Y")
+            d2 = datetime.strptime(e, "%d.%m.%Y")
+            year_start = datetime(year, 1, 1)
+            year_end = datetime(year, 12, 31)
+            start = max(d1, year_start)
+            end = min(d2, year_end)
+            if start <= end:
+                total += (end - start).days + 1
+        except:
+            pass
+    return total
 # ============================================================
 # Удаление записей
 # ============================================================

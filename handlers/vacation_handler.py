@@ -4,14 +4,16 @@
 
 import re
 import sqlite3
+from datetime import datetime
 
 import discord
 
-from config import DB_NAME
+from config import DB_NAME, MAX_VACATION_DAYS_PER_YEAR, SUPER_ADMIN_IDS
 from db import (
     add_vacation_request, get_vacation_by_id, check_existing_vacation,
     request_vacation_change, update_vacation_status, apply_vacation_change,
-    admin_change_vacation, delete_vacation_db, get_all_active_vacations
+    admin_change_vacation, delete_vacation_db, get_all_active_vacations,
+    get_vacation_days_for_year
 )
 from .utils import (
     now_msk, is_valid_date, normalize_date,
@@ -150,6 +152,47 @@ async def _handle_vacation_create(message: discord.Message, bot, current_admins:
         if is_admin(user_id, current_admins):
             admin_mode = True
 
+    # Парсим даты для проверок
+    try:
+        d1 = datetime.strptime(start_date, "%d.%m.%Y")
+        d2 = datetime.strptime(end_date, "%d.%m.%Y")
+        new_days = (d2 - d1).days + 1
+    except:
+        await message.channel.send("❌ Ошибка расчёта дней отпуска.")
+        return
+
+    # Проверка: даты не в прошлом (кроме суперадмина)
+    if user_id not in SUPER_ADMIN_IDS:
+        today = datetime.now()
+        if d1.date() < today.date():
+            await message.channel.send("❌ Нельзя создать отпуск с датой начала в прошлом.")
+            return
+
+    # Проверка: пересечение с существующими отпусками
+    existing = get_all_active_vacations()
+    for uid, s, e in existing:
+        if uid == target_user.id:
+            try:
+                exist_d1 = datetime.strptime(s, "%d.%m.%Y")
+                exist_d2 = datetime.strptime(e, "%d.%m.%Y")
+                if not (d2 < exist_d1 or d1 > exist_d2):
+                    await message.channel.send(
+                        f"❌ Даты пересекаются с уже утверждённым отпуском {target_user.display_name}: {s} - {e}."
+                    )
+                    return
+            except:
+                pass
+
+    # Проверка лимита дней в году
+    year = d1.year
+    used = get_vacation_days_for_year(target_user.id, year)
+    if used + new_days > MAX_VACATION_DAYS_PER_YEAR:
+        await message.channel.send(
+            f"❌ Нельзя назначить {new_days} дн. отпуска. "
+            f"У {target_user.display_name} уже использовано {used:.0f} дн. из {MAX_VACATION_DAYS_PER_YEAR} за {year} год."
+        )
+        return
+
     if admin_mode:
         add_vacation_request(target_user.id, start_date, end_date, "approved")
         await message.channel.send(
@@ -250,6 +293,55 @@ async def _handle_vacation_change(message: discord.Message, bot, current_admins:
             f"❌ Существующий отпуск с {old_start} по {old_end} у пользователя {target_user.display_name} не найден в базе!"
         )
         return
+
+    # Проверки при изменении
+    if not is_delete:
+        try:
+            d1 = datetime.strptime(new_start, "%d.%m.%Y")
+            d2 = datetime.strptime(new_end, "%d.%m.%Y")
+            new_days = (d2 - d1).days + 1
+            old_d1 = datetime.strptime(old_start, "%d.%m.%Y")
+            old_d2 = datetime.strptime(old_end, "%d.%m.%Y")
+            old_days = (old_d2 - old_d1).days + 1
+        except:
+            await message.channel.send("❌ Ошибка расчёта дней отпуска.")
+            return
+
+        # Проверка: даты не в прошлом (кроме суперадмина)
+        if user_id not in SUPER_ADMIN_IDS:
+            today = datetime.now()
+            if d1.date() < today.date():
+                await message.channel.send("❌ Нельзя перенести отпуск на дату в прошлом.")
+                return
+
+        # Проверка: пересечение с другими отпусками (исключая текущий)
+        existing = get_all_active_vacations()
+        for uid, s, e in existing:
+            if uid == target_user.id:
+                try:
+                    exist_d1 = datetime.strptime(s, "%d.%m.%Y")
+                    exist_d2 = datetime.strptime(e, "%d.%m.%Y")
+                    # Пропускаем тот же самый отпуск
+                    if s == old_start and e == old_end:
+                        continue
+                    if not (d2 < exist_d1 or d1 > exist_d2):
+                        await message.channel.send(
+                            f"❌ Новые даты пересекаются с другим отпуском {target_user.display_name}: {s} - {e}."
+                        )
+                        return
+                except:
+                    pass
+
+        # Проверка лимита дней в году
+        year = d1.year
+        used = get_vacation_days_for_year(target_user.id, year)
+        available = MAX_VACATION_DAYS_PER_YEAR - (used - old_days)
+        if new_days > available:
+            await message.channel.send(
+                f"❌ Нельзя изменить на {new_days} дн. "
+                f"У {target_user.display_name} доступно только {available:.0f} дн. из {MAX_VACATION_DAYS_PER_YEAR} за {year} год."
+            )
+            return
 
     if admin_mode:
         if is_delete:
