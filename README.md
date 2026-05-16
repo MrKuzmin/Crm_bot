@@ -193,4 +193,8 @@ SQLite
 python-dotenv
 
 Лицензия
+<<<<<<< HEAD
 MIT
+=======
+MIT
+>>>>>>> ebacfde0e9ec62c536979aee34b72476fc7bc602
