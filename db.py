@@ -1,6 +1,6 @@
 # ============================================================
 # db.py — вся работа с базой данных SQLite
-# Таблицы: absences, overtimes, log, admins, history_log
+# Таблицы: absences, overtimes, log, admins, history_log, vacations
 # Никакой логики Discord — только данные
 # ============================================================
 
@@ -61,6 +61,20 @@ def init_db():
                 timestamp TEXT DEFAULT (datetime('now','localtime'))
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS vacations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_name TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                department TEXT DEFAULT 'Общий',
+                new_start_date TEXT,
+                new_end_date TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
         conn.commit()
 
 
@@ -113,13 +127,117 @@ def add_overtime(user_id: int, date: str, hours: float):
 
 
 def add_history(user_id: int, action: str, details: str = ""):
-    """Записать событие в историю пользователя (удаление, обнуление, увольнение)"""
+    """Записать событие в историю пользователя"""
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute(
             "INSERT INTO history_log (user_id, action, details) VALUES (?, ?, ?)",
             (user_id, action, details)
         )
         conn.commit()
+
+
+# ============================================================
+# Логика работы с отпусками
+# ============================================================
+
+def add_vacation_request(user_id: int, user_name: str, start_date: str, end_date: str, status: str, dept: str = "Общий") -> int:
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.execute(
+            "INSERT INTO vacations (user_id, user_name, start_date, end_date, status, department) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, user_name, start_date, end_date, status, dept)
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_vacation_by_id(vac_id: int) -> dict:
+    with sqlite3.connect(DB_NAME) as conn:
+        row = conn.execute(
+            "SELECT id, user_id, user_name, start_date, end_date, status, department, new_start_date, new_end_date FROM vacations WHERE id = ?",
+            (vac_id,)
+        ).fetchone()
+        if row:
+            return {
+                "id": row[0], "user_id": row[1], "user_name": row[2],
+                "start_date": row[3], "end_date": row[4], "status": row[5],
+                "department": row[6], "new_start_date": row[7], "new_end_date": row[8]
+            }
+    return None
+
+
+def check_existing_vacation(user_id: int, start_date: str, end_date: str) -> bool:
+    with sqlite3.connect(DB_NAME) as conn:
+        row = conn.execute(
+            "SELECT id FROM vacations WHERE user_id = ? AND start_date = ? AND end_date = ? AND status = 'approved'",
+            (user_id, start_date, end_date)
+        ).fetchone()
+        return row is not None
+
+
+def request_vacation_change(user_id: int, start_date: str, end_date: str, new_start: str, new_end: str) -> int:
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.execute(
+            "UPDATE vacations SET status = 'pending_change', new_start_date = ?, new_end_date = ? WHERE user_id = ? AND start_date = ? AND end_date = ? AND status = 'approved'",
+            (new_start, new_end, user_id, start_date, end_date)
+        )
+        conn.commit()
+        if cursor.rowcount > 0:
+            row = conn.execute(
+                "SELECT id FROM vacations WHERE user_id = ? AND start_date = ? AND end_date = ?",
+                (user_id, start_date, end_date)
+            ).fetchone()
+            return row[0] if row else None
+    return None
+
+
+def update_vacation_status(vac_id: int, status: str):
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute("UPDATE vacations SET status = ? WHERE id = ?", (status, vac_id))
+        conn.commit()
+
+
+def apply_vacation_change(vac_id: int):
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute(
+            "UPDATE vacations SET start_date = new_start_date, end_date = new_end_date, status = 'approved', new_start_date = NULL, new_end_date = NULL WHERE id = ?",
+            (vac_id,)
+        )
+        conn.commit()
+
+
+def admin_change_vacation(user_id: int, old_start: str, old_end: str, new_start: str, new_end: str) -> bool:
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.execute(
+            "UPDATE vacations SET start_date = ?, end_date = ? WHERE user_id = ? AND start_date = ? AND end_date = ? AND status = 'approved'",
+            (new_start, new_end, user_id, old_start, old_end)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def delete_vacation_db(user_id: int, start_date: str, end_date: str) -> bool:
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.execute(
+            "DELETE FROM vacations WHERE user_id = ? AND start_date = ? AND end_date = ?",
+            (user_id, start_date, end_date)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_all_active_vacations() -> list:
+    with sqlite3.connect(DB_NAME) as conn:
+        return conn.execute(
+            "SELECT user_id, start_date, end_date FROM vacations WHERE status = 'approved' ORDER BY start_date ASC"
+        ).fetchall()
+
+
+def get_vacations_starting_today(date_str: str) -> list:
+    with sqlite3.connect(DB_NAME) as conn:
+        return conn.execute(
+            "SELECT user_id, start_date, end_date FROM vacations WHERE status = 'approved' AND start_date = ?",
+            (date_str,)
+        ).fetchall()
 
 
 # ============================================================
@@ -150,6 +268,7 @@ def delete_all_user_records(user_id: int):
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute("DELETE FROM absences WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM overtimes WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM vacations WHERE user_id = ?", (user_id,))
         conn.commit()
 
 
