@@ -60,8 +60,10 @@ class VacationApprovalView(discord.ui.View):
                     await target_user.send(
                         f"🎉 Ваша заявка на отпуск с {vac['start_date']} по {vac['end_date']} была **одобрена** администратором!"
                     )
-                except:
+                except discord.Forbidden:
                     pass
+                except Exception as e:
+                    print(f"[WARN] Не удалось отправить ЛС об одобрении отпуска: {e}")
         elif vac["status"] == "pending_change":
             apply_vacation_change(self.vac_id)
             msg = f"✅ Изменение отпуска для {target_name} на даты ({vac['new_start_date']} - {vac['new_end_date']}) успешно утверждено!"
@@ -70,8 +72,10 @@ class VacationApprovalView(discord.ui.View):
                     await target_user.send(
                         f"🎉 Изменение вашего отпуска на период с {vac['new_start_date']} по {vac['new_end_date']} было **одобрено**!"
                     )
-                except:
+                except discord.Forbidden:
                     pass
+                except Exception as e:
+                    print(f"[WARN] Не удалось отправить ЛС об изменении отпуска: {e}")
         else:
             await interaction.response.send_message("⚠️ Данная заявка уже была обработана ранее.", ephemeral=True)
             return
@@ -105,8 +109,10 @@ class VacationApprovalView(discord.ui.View):
         if target_user:
             try:
                 await target_user.send("⚠️ Ваша заявка/запрос на изменение отпуска были **отклонены** администратором.")
-            except:
+            except discord.Forbidden:
                 pass
+            except Exception as e:
+                print(f"[WARN] Не удалось отправить ЛС об отклонении: {e}")
         for item in self.children:
             item.disabled = True
         await interaction.message.edit(content=f"~~{interaction.message.content}~~\n\n{msg}", view=self)
@@ -140,8 +146,8 @@ async def celebrate_vacations_task():
                     f"(с `{s_date}` по `{e_date}`)!\n"
                     f"Желаем круто провести время, набраться сил, отключить рабочие чаты и хорошенько перезагрузиться! 🎉☀️"
                 )
-            except:
-                pass
+            except Exception as e:
+                print(f"[ERROR] Не удалось отправить поздравление в общий чат: {e}")
 
 
 @bot.event
@@ -213,7 +219,7 @@ async def slash_vacation_help(interaction: discord.Interaction):
         "⚠️ **Важно:** Подача всех заявок и работа с отпусками происходит **СТРОГО в личных сообщениях боту**!\n\n"
         "**Пользовательские команды (в ЛС боту):**\n"
         "• `отпуск ДД.ММ.ГГ-ДД.ММ.ГГ` — Отправить заявку на отпуск админу.\n"
-        "• `мои отпуска` — Показать таблицу ваших отпусков и отпусков всей команды.\n"
+        "• `мои отпуска` — Показать таблицу отпусков вашего отдела.\n"
         "• `изменить отпуск ДД.ММ.ГГ-ДД.ММ.ГГ на ДД.ММ.ГГ-ДД.ММ.ГГ` — Отправить заявку на перенос существующего отпуска.\n"
         "• `изменить отпуск ДД.ММ.ГГ-ДД.ММ.ГГ на 0` — Полное удаление существующего отпуска.\n\n"
         "**Административные команды (в ЛС боту):**\n"
@@ -226,8 +232,10 @@ async def slash_vacation_help(interaction: discord.Interaction):
         await interaction.response.send_message("✉️ Инструкция отправлена в личные сообщения.", ephemeral=True)
         try:
             await interaction.user.send(help_text)
-        except:
+        except discord.Forbidden:
             pass
+        except Exception as e:
+            print(f"[WARN] Не удалось отправить справку в ЛС: {e}")
     else:
         await interaction.response.send_message(help_text)
 

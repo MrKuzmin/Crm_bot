@@ -7,8 +7,14 @@
 import sqlite3
 import csv
 import io
-from datetime import datetime, timedelta as td
+from datetime import datetime, timezone, timedelta as td
 from config import DB_NAME, SUPER_ADMIN_IDS
+
+# Московское время для записи в БД
+MSK = timezone(td(hours=3))
+
+def now_db() -> str:
+    return datetime.now(MSK).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ============================================================
@@ -65,11 +71,9 @@ def init_db():
             CREATE TABLE IF NOT EXISTS vacations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
-                user_name TEXT NOT NULL,
                 start_date TEXT NOT NULL,
                 end_date TEXT NOT NULL,
                 status TEXT NOT NULL,
-                department TEXT DEFAULT 'Общий',
                 new_start_date TEXT,
                 new_end_date TEXT,
                 created_at TEXT DEFAULT (datetime('now','localtime'))
@@ -111,8 +115,8 @@ def remove_admin_from_db(user_id: int):
 def add_absence(user_id: int, date: str, hours: float):
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute(
-            "INSERT INTO absences (user_id, date, hours) VALUES (?, ?, ?)",
-            (user_id, date, hours)
+            "INSERT INTO absences (user_id, date, hours, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, date, hours, now_db())
         )
         conn.commit()
 
@@ -120,8 +124,8 @@ def add_absence(user_id: int, date: str, hours: float):
 def add_overtime(user_id: int, date: str, hours: float):
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute(
-            "INSERT INTO overtimes (user_id, date, hours) VALUES (?, ?, ?)",
-            (user_id, date, hours)
+            "INSERT INTO overtimes (user_id, date, hours, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, date, hours, now_db())
         )
         conn.commit()
 
@@ -130,8 +134,8 @@ def add_history(user_id: int, action: str, details: str = ""):
     """Записать событие в историю пользователя"""
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute(
-            "INSERT INTO history_log (user_id, action, details) VALUES (?, ?, ?)",
-            (user_id, action, details)
+            "INSERT INTO history_log (user_id, action, details, timestamp) VALUES (?, ?, ?, ?)",
+            (user_id, action, details, now_db())
         )
         conn.commit()
 
@@ -140,11 +144,11 @@ def add_history(user_id: int, action: str, details: str = ""):
 # Логика работы с отпусками
 # ============================================================
 
-def add_vacation_request(user_id: int, user_name: str, start_date: str, end_date: str, status: str, dept: str = "Общий") -> int:
+def add_vacation_request(user_id: int, start_date: str, end_date: str, status: str) -> int:
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.execute(
-            "INSERT INTO vacations (user_id, user_name, start_date, end_date, status, department) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, user_name, start_date, end_date, status, dept)
+            "INSERT INTO vacations (user_id, start_date, end_date, status, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, start_date, end_date, status, now_db())
         )
         conn.commit()
         return cursor.lastrowid
@@ -153,14 +157,14 @@ def add_vacation_request(user_id: int, user_name: str, start_date: str, end_date
 def get_vacation_by_id(vac_id: int) -> dict:
     with sqlite3.connect(DB_NAME) as conn:
         row = conn.execute(
-            "SELECT id, user_id, user_name, start_date, end_date, status, department, new_start_date, new_end_date FROM vacations WHERE id = ?",
+            "SELECT id, user_id, start_date, end_date, status, new_start_date, new_end_date FROM vacations WHERE id = ?",
             (vac_id,)
         ).fetchone()
         if row:
             return {
-                "id": row[0], "user_id": row[1], "user_name": row[2],
-                "start_date": row[3], "end_date": row[4], "status": row[5],
-                "department": row[6], "new_start_date": row[7], "new_end_date": row[8]
+                "id": row[0], "user_id": row[1],
+                "start_date": row[2], "end_date": row[3], "status": row[4],
+                "new_start_date": row[5], "new_end_date": row[6]
             }
     return None
 
@@ -182,10 +186,7 @@ def request_vacation_change(user_id: int, start_date: str, end_date: str, new_st
         )
         conn.commit()
         if cursor.rowcount > 0:
-            row = conn.execute(
-                "SELECT id FROM vacations WHERE user_id = ? AND start_date = ? AND end_date = ?",
-                (user_id, start_date, end_date)
-            ).fetchone()
+            row = conn.execute("SELECT id FROM vacations WHERE user_id = ? AND start_date = ? AND end_date = ?", (user_id, start_date, end_date)).fetchone()
             return row[0] if row else None
     return None
 
@@ -233,6 +234,7 @@ def get_all_active_vacations() -> list:
 
 
 def get_vacations_starting_today(date_str: str) -> list:
+    """Находит все одобренные отпуска, начинающиеся на указанную дату"""
     with sqlite3.connect(DB_NAME) as conn:
         return conn.execute(
             "SELECT user_id, start_date, end_date FROM vacations WHERE status = 'approved' AND start_date = ?",
@@ -359,7 +361,7 @@ def get_full_history(user_id: int) -> list:
 def export_user_csv(user_id: int, months: int = 1) -> tuple:
     """Экспорт записей пользователя за N месяцев в CSV"""
     records = get_full_history(user_id)
-    cutoff = (datetime.now() - td(days=months * 30)).strftime("%Y-%m-%d")
+    cutoff = (datetime.now(MSK) - td(days=months * 30)).strftime("%Y-%m-%d")
 
     filtered = [
         (date, hours, rtype) for date, hours, rtype in records
@@ -384,7 +386,7 @@ def export_user_csv(user_id: int, months: int = 1) -> tuple:
     writer.writerow(["Итог", itog, ""])
 
     csv_bytes = output.getvalue().encode('utf-8-sig')
-    filename = f"otchet_{user_id}_{datetime.now().strftime('%Y-%m-%d')}_{months}mes.csv"
+    filename = f"otchet_{user_id}_{datetime.now(MSK).strftime('%Y-%m-%d')}_{months}mes.csv"
 
     return filename, csv_bytes
 
@@ -396,8 +398,8 @@ def export_user_csv(user_id: int, months: int = 1) -> tuple:
 def log_to_db(user_id: int, action: str, target_user_id: int = None, details: str = ""):
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute(
-            "INSERT INTO log (user_id, action, target_user_id, details) VALUES (?, ?, ?, ?)",
-            (user_id, action, target_user_id, details)
+            "INSERT INTO log (user_id, action, target_user_id, details, timestamp) VALUES (?, ?, ?, ?, ?)",
+            (user_id, action, target_user_id, details, now_db())
         )
         conn.commit()
     return f"[LOG] user={user_id} action={action} target={target_user_id} details={details}"

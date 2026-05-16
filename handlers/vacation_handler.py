@@ -40,33 +40,31 @@ async def handle_vacation_command(message: discord.Message, bot, current_admins:
 async def _cmd_my_vacations(message: discord.Message, user_id: int, bot):
     """Показывает отпуска сотрудника и его отдела"""
     vacations = get_all_active_vacations()
-    
-    # Определяем отдел текущего пользователя
+
     member = await get_user_by_id(user_id, bot)
     my_dept = extract_department(member.display_name).lower() if member else "общий"
-    
-    # Фильтруем: только свой отдел
+
     filtered = []
     for uid, s_date, e_date in vacations:
         m = await get_user_by_id(uid, bot)
         dept = extract_department(m.display_name).lower() if m else "общий"
         if dept == my_dept:
             filtered.append((uid, s_date, e_date, m.display_name if m else f"ID:{uid}"))
-    
-    table_lines = ["```", f"📋 ГРАФИК ОТПУСКОВ ОТДЕЛА {my_dept.upper()} И ВАШ СТАТУС", "=" * 50]
-    table_lines.append(f"{'Сотрудник':<18} | {'Начало':<10} | {'Окончание':<10}")
-    table_lines.append("-" * 50)
-    
+
+    table_lines = ["```", f"📋 ГРАФИК ОТПУСКОВ ОТДЕЛА {my_dept.upper()} И ВАШ СТАТУС", "=" * 52]
+    table_lines.append(f"{'Сотрудник':<32} | {'Начало':<10} | {'Окончание':<10}")
+    table_lines.append("-" * 54)
+
     if not filtered:
         table_lines.append(f"В отделе {my_dept.upper()} активных отпусков нет.")
     else:
         for uid, s_date, e_date, display_name in filtered:
             marker = " (Вы)" if uid == user_id else ""
             full = f"{display_name}{marker}"
-            if len(full) > 18:
-                full = full[:15] + "..."
-            table_lines.append(f"{full:<18} | {s_date:<10} | {e_date:<10}")
-    
+            if len(full) > 32:
+                full = full[:29] + "..."
+            table_lines.append(f"{full:<32} | {s_date:<10} | {e_date:<10}")
+
     table_lines.append("```")
     await message.channel.send("\n".join(table_lines))
 
@@ -95,12 +93,12 @@ async def _cmd_vacation_status(message: discord.Message, bot, current_admins: li
     for dept, vac_list in by_dept.items():
         msg_parts.append(f"📁 **Отдел: {dept}**")
         msg_parts.append("```")
-        msg_parts.append(f"{'Сотрудник':<20} | {'Дата начала':<12} | {'Дата окончания':<12}")
-        msg_parts.append("-" * 52)
+        msg_parts.append(f"{'Сотрудник':<32} | {'Дата начала':<12} | {'Дата окончания':<12}")
+        msg_parts.append("-" * 60)
         for name, s_date, e_date in vac_list:
-            if len(name) > 20:
-                name = name[:17] + "..."
-            msg_parts.append(f"{name:<20} | {s_date:<12} | {e_date:<12}")
+            if len(name) > 32:
+                name = name[:29] + "..."
+            msg_parts.append(f"{name:<32} | {s_date:<12} | {e_date:<12}")
         msg_parts.append("```\n")
 
     await message.channel.send("\n".join(msg_parts))
@@ -162,8 +160,10 @@ async def _handle_vacation_create(message: discord.Message, bot, current_admins:
                 await target_user.send(
                     f"💼 Администратор напрямую утвердил вам отпуск в период с **{start_date}** по **{end_date}**."
                 )
-            except:
+            except discord.Forbidden:
                 pass
+            except Exception as e:
+                print(f"[WARN] Не удалось отправить ЛС об утверждении отпуска: {e}")
         await send_log("admin_add_vacation", user_id, target_user.id, f"dates={start_date}-{end_date}", bot)
     else:
         vac_id = add_vacation_request(user_id, start_date, end_date, "pending_approval")
@@ -179,8 +179,10 @@ async def _handle_vacation_create(message: discord.Message, bot, current_admins:
                         f"Период: **{start_date} - {end_date}**",
                         view=view
                     )
-                except:
+                except discord.Forbidden:
                     pass
+                except Exception as e:
+                    print(f"[WARN] Не удалось отправить заявку админу {admin_id}: {e}")
         await message.channel.send(
             f"✉️ Заявка на отпуск с `{start_date}` по `{end_date}` отправлена руководству. Ожидайте подтверждения."
         )
@@ -255,8 +257,10 @@ async def _handle_vacation_change(message: discord.Message, bot, current_admins:
             await message.channel.send(f"🗑️ Админ удалил отпуск для {target_user.display_name} ({old_start} - {old_end}).")
             try:
                 await target_user.send(f"🗑️ Администратор удалил ваш отпуск с {old_start} по {old_end}.")
-            except:
+            except discord.Forbidden:
                 pass
+            except Exception as e:
+                print(f"[WARN] Не удалось отправить ЛС об удалении отпуска: {e}")
         else:
             admin_change_vacation(target_user.id, old_start, old_end, new_start, new_end)
             await message.channel.send(
@@ -267,8 +271,10 @@ async def _handle_vacation_change(message: discord.Message, bot, current_admins:
                     f"🔄 Администратор изменил даты вашего отпуска с ({old_start} - {old_end}) "
                     f"на новые: **{new_start} - {new_end}**."
                 )
-            except:
+            except discord.Forbidden:
                 pass
+            except Exception as e:
+                print(f"[WARN] Не удалось отправить ЛС об изменении отпуска: {e}")
         await send_log("admin_vacation_change", user_id, target_user.id, f"delete={is_delete}", bot)
     else:
         if is_delete:
@@ -285,8 +291,10 @@ async def _handle_vacation_change(message: discord.Message, bot, current_admins:
                             f"Удалить отпуск: с {old_start} по {old_end}",
                             view=view
                         )
-                    except:
+                    except discord.Forbidden:
                         pass
+                    except Exception as e:
+                        print(f"[WARN] Не удалось отправить заявку на удаление админу {admin_id}: {e}")
             await message.channel.send("✉️ Заявка на удаление отпуска успешно отправлена администраторам на подтверждение.")
         else:
             vac_id = request_vacation_change(user_id, old_start, old_end, new_start, new_end)
@@ -305,8 +313,10 @@ async def _handle_vacation_change(message: discord.Message, bot, current_admins:
                             f"Новые даты: **{new_start} - {new_end}**",
                             view=view
                         )
-                    except:
+                    except discord.Forbidden:
                         pass
+                    except Exception as e:
+                        print(f"[WARN] Не удалось отправить заявку на изменение админу {admin_id}: {e}")
             await message.channel.send(
                 f"✉️ Заявка на перенос отпуска с {old_start} на новые даты **{new_start} - {new_end}** отправлена админам."
             )
